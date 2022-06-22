@@ -42,6 +42,7 @@ int main(){
 			rli.rlim_cur=rli.rlim_max;
 		}
 	//	rli.rlim_cur=65535;
+	//增加一行注释
 		int srlim=setrlimit(RLIMIT_NOFILE,&rli);
 		if(srlim<0)
 		{
