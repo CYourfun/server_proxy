@@ -11,7 +11,7 @@
 #include<signal.h>
 #include <sys/resource.h>
 #define Port 8000
-
+//初级版本
 int main(){
     int lfd = socket(AF_INET, SOCK_STREAM,0);//(1)socket
 	if(lfd<0)
