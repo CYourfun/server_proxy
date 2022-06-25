@@ -1,0 +1,3 @@
+/home/zzy/Work/server/server03/echo_server/out/CMakeFiles/edit_cache.dir
+/home/zzy/Work/server/server03/echo_server/out/CMakeFiles/rebuild_cache.dir
+/home/zzy/Work/server/server03/echo_server/out/CMakeFiles/echo_server.dir
