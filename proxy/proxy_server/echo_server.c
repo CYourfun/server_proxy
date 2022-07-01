@@ -17,7 +17,7 @@
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #endif
 
-#if 1
+#if 0
 #define INFO(fmt, ...) fprintf(stdout, fmt, ##__VA_ARGS__)
 #else
 #define INFO(fmt, ...)
@@ -29,6 +29,7 @@ struct conn_s
 {
     ev2_loop_t *loop;
     ev2_poll_t *poll;
+	ev2_poll_t *poll2;
     int fd;
 	int fd2;//用于connect
 	unsigned int bytes;
@@ -41,27 +42,17 @@ conn_t *conn_new(ev2_loop_t *loop, int fd)
         memset(conn, 0, sizeof(conn_t));
         conn->loop = loop;
         conn->poll = ev2_poll_new(loop);
+		conn->poll2 = ev2_poll_new(loop);
         if (conn->poll == NULL) {
             free(conn);
             return NULL;
         }
+		if(conn->poll2 == NULL)
+		{
+			free(conn);
+			return NULL;
+		}
         conn->fd = fd;
-    }
-    return conn;
-}
-
-conn_t *conn_new2(ev2_loop_t *loop, int fd)//++
-{
-    conn_t *conn = (conn_t *)malloc(sizeof(conn_t));
-    if (conn != NULL) {
-        memset(conn, 0, sizeof(conn_t));
-        conn->loop = loop;
-        conn->poll = ev2_poll_new(loop);
-        if (conn->poll == NULL) {
-            free(conn);
-            return NULL;
-        }
-        conn->fd2 = fd;
     }
     return conn;
 }
@@ -70,10 +61,16 @@ void conn_free(conn_t *conn)
 {
     if (conn != NULL) {
         ev2_poll_free(conn->poll);
+		ev2_poll_free(conn->poll2);
         if (conn->fd != -1) {
             close(conn->fd);
             conn->fd = -1;
         }
+		if(conn->fd2 != -1)
+		{
+			close(conn->fd2);
+			conn->fd2 = -1;	
+		}
         free(conn);
     }
 }
@@ -148,13 +145,13 @@ static void echo_server__on_readable(void *arg, int fd, int what)
     }
 
     if (what & EV2_DISCONNECT) {
-        INFO("disconnect fd=%d\n", conn->fd);
+        printf("disconnect fd=%d\n", conn->fd);
 
         shutdown(conn->fd, SHUT_WR);
         conn_free(conn);
         return;
     }
-
+	
     if (what & EV2_READABLE) {
         while (1) {
             len = recv(conn->fd, buf, sizeof(buf), MSG_DONTWAIT);
@@ -164,11 +161,11 @@ static void echo_server__on_readable(void *arg, int fd, int what)
 
                 perror("recv");
                 conn_free(conn);
-                return;
+	 			return;
             }
             else if (len == 0) {
                 INFO("disconnect fd=%d\n", conn->fd);
-	         	printf("连接fd=%d转发的数据量为%d Bytes\n",fd,conn->bytes);//打印每条连接数据
+	         	INFO("连接fd=%d转发的数据量为%d Bytes\n",fd,conn->bytes);//打印每条连接数据
                 shutdown(conn->fd, SHUT_WR);
                 conn_free(conn);
                 return;
@@ -203,7 +200,7 @@ static void echo_server__on_readable2(void *arg, int fd, int what)//++
     }
 
     if (what & EV2_DISCONNECT) {
-        INFO("disconnect fd=%d\n", conn->fd);
+        printf("disconnect fd=%d\n", conn->fd);
 
         shutdown(conn->fd, SHUT_WR);
         conn_free(conn);
@@ -223,7 +220,7 @@ static void echo_server__on_readable2(void *arg, int fd, int what)//++
             }
             else if (len == 0) {
                 INFO("disconnect fd=%d\n", conn->fd);
-	         	printf("连接fd=%d转发的数据量为%d Bytes\n",fd,conn->bytes);//打印每条连接数据
+	         	INFO("连接fd=%d转发的数据量为%d Bytes\n",fd,conn->bytes);//打印每条连接数据
                 shutdown(conn->fd, SHUT_WR);
                 conn_free(conn);
                 return;
@@ -280,7 +277,7 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
 	
 		char dst[64];
 		inet_ntop(AF_INET6,&sa.sin6_addr.s6_addr,dst,sizeof(dst));
-		printf("The connection IP=%s,Port=%d\n",dst,ntohs(sa.sin6_port));
+		INFO("The connection IP=%s,Port=%d\n",dst,ntohs(sa.sin6_port));
 
 		
         conn_t *conn = conn_new(s->loop, cfd);
@@ -302,23 +299,23 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
 		{
 			perror("connection error");
 			abort();
-		}
-		
-		
+		}	
+	
         err = ev2_poll_register(conn->poll, cfd, EV2_READABLE, conn, echo_server__on_readable);
         if (err < 0) {
+			printf("register false\n");
             //perror("epoll_ctl");
             conn_free(conn);
         }
-	
 		err =0;//++
-		err = ev2_poll_register(conn->poll,conn->fd2,EV2_READABLE,conn,echo_server__on_readable2);//++
+		err = ev2_poll_register(conn->poll2,conn->fd2,EV2_READABLE,conn,echo_server__on_readable2);//++
 		if(err < 0)//++
 		{
+		 	printf("register false\n");
 			conn_free(conn);
 		}
 
-        printf("new connection fd=%d\n", conn->fd);
+        INFO("new connection fd=%d\n", conn->fd);
     }
 }
 
