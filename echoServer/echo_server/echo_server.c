@@ -1,4 +1,3 @@
-
 #include "ev2.h"
 #include "echo_server.h"
 
@@ -29,7 +28,9 @@ struct conn_s
 {
     ev2_loop_t *loop;
     ev2_poll_t *poll;
-    int fd;
+	ev2_poll_t *poll2;
+    int fd1;
+	int fd2;
 };
 
 conn_t *conn_new(ev2_loop_t *loop, int fd)
@@ -39,11 +40,17 @@ conn_t *conn_new(ev2_loop_t *loop, int fd)
         memset(conn, 0, sizeof(conn_t));
         conn->loop = loop;
         conn->poll = ev2_poll_new(loop);
-        if (conn->poll == NULL) {
-            free(conn);
-            return NULL;
-        }
-        conn->fd = fd;
+		if (conn->poll == NULL) {
+			free(conn);
+			return NULL;
+		}
+		conn->poll2 = ev2_poll_new(loop);
+		if (conn->poll2 == NULL) {
+			ev2_poll_free(conn->poll);
+			free(conn);
+			return NULL;
+		}
+        conn->fd1 = fd;
     }
     return conn;
 }
@@ -52,10 +59,16 @@ void conn_free(conn_t *conn)
 {
     if (conn != NULL) {
         ev2_poll_free(conn->poll);
-        if (conn->fd != -1) {
-            close(conn->fd);
-            conn->fd = -1;
+		ev2_poll_free(conn->poll2);
+        if (conn->fd1 != -1) {
+            close(conn->fd1);
+            conn->fd1 = -1;
         }
+		if (conn->fd2 != -1)//++ ++
+		{
+			close(conn->fd2);
+			conn->fd2 = -1;
+		}
         free(conn);
     }
 }
@@ -66,6 +79,7 @@ struct echo_server_s
     ev2_loop_t *loop;
     ev2_poll_t *poll;
     int fd;
+
 };
 
 echo_server_t *echo_server_new(ev2_loop_t *loop)
@@ -130,15 +144,15 @@ static void echo_server__on_readable(void *arg, int fd, int what)
     }
 
     if (what & EV2_DISCONNECT) {
-        INFO("disconnect fd=%d\n", conn->fd);
-        shutdown(conn->fd, SHUT_WR);
+        INFO("disconnect fd=%d\n", conn->fd1);
+        shutdown(conn->fd1, SHUT_WR);
         conn_free(conn);
         return;
     }
 
     if (what & EV2_READABLE) {
         while (1) {
-            len = recv(conn->fd, buf, sizeof(buf), MSG_DONTWAIT);
+            len = recv(conn->fd1, buf, sizeof(buf), MSG_DONTWAIT);
             if (len < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     return;
@@ -148,13 +162,14 @@ static void echo_server__on_readable(void *arg, int fd, int what)
                 return;
             }
             else if (len == 0) {
-                INFO("disconnect fd=%d\n", conn->fd);
-                shutdown(conn->fd, SHUT_WR);
+                INFO("disconnect fd=%d\n", conn->fd1);
+                shutdown(conn->fd1, SHUT_WR);
+
                 conn_free(conn);
                 return;
             }
             else {
-                err = simple_send(conn->fd, buf, (size_t)len);
+                err = simple_send(conn->fd2, buf, (size_t)len);
                 if (err < 0) {
                     conn_free(conn);
                     return;
@@ -168,10 +183,70 @@ static void echo_server__on_readable(void *arg, int fd, int what)
     }
 }
 
+static void echo_server__on_readable2(void *arg, int fd, int what)
+{
+	conn_t *conn = (conn_t *)arg;
+	char buf[4096];
+	ssize_t len;
+	int err;
+	int count = 0;
+
+	if (what < 0) {
+		conn_free(conn);
+		return;
+	}
+
+	if (what & EV2_DISCONNECT) {
+		INFO("disconnect fd=%d\n", conn->fd);
+		shutdown(conn->fd2, SHUT_WR);//++ ++
+		conn_free(conn);
+		return;
+	}
+
+	if (what & EV2_READABLE) {
+		while (1) {
+			len = recv(conn->fd2, buf, sizeof(buf), MSG_DONTWAIT);
+			if (len < 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					return;
+
+				perror("recv");
+				conn_free(conn);
+				return;
+			}
+			else if (len == 0) {
+				INFO("disconnect fd=%d\n", conn->fd);
+				shutdown(conn->fd2, SHUT_WR);//++ ++
+				conn_free(conn);
+				return;
+			}
+			else {
+				err = simple_send(conn->fd1, buf, (size_t)len);
+				if (err < 0) {
+					conn_free(conn);
+					return;
+				}
+				if (len < (int)ARRAY_SIZE(buf) ||
+					count++ >= 1) {
+					break;
+				}
+			}
+		}
+	}
+}
+
+
 static void echo_server__on_new_connection(void *arg, int fd, int what)
 {
     echo_server_t *s = (echo_server_t *)arg;
     struct sockaddr_in6 sa;
+	
+	struct sockaddr_in6 sa2;//++
+	memset(&sa2, 0, sizeof(sa2));
+	sa2.sin6_family = AF_INET6;
+	sa2.sin6_addr.__in6_u.__u6_addr32[4] = inet_addr("192.168.91.128");
+	sa2.sin6_port = htons(8080);
+
     socklen_t sa_len;
     int cfd;
     int err;
@@ -184,7 +259,9 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
     if (what & EV2_READABLE) {
         memset(&sa, 0, sizeof(struct sockaddr_in6));
         sa_len = sizeof(struct sockaddr_in6);
-        cfd = accept(s->fd, &sa, &sa_len);
+        cfd = accept(s->fd, &sa, &sa_len);//accept
+		
+		
         if (cfd < 0) {
             perror("accept");
             if (errno == EMFILE ||
@@ -196,16 +273,41 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
         }
 
         conn_t *conn = conn_new(s->loop, cfd);
-        if (conn == NULL) {
-            close(cfd);
+		if (conn == NULL) {
+			close(cfd);
+			return;
+		}
+		
+	    conn->fd2 = socket(AF_INET6, SOCK_STREAM, 0);//++
+		if (conn->fd2 < 0)
+		{
+			perror("socket error");
+			abort();
+		}
+
+		int con = connect(conn->fd2, (struct sockaddr*)&sa2, sizeof(sa2));//++
+		if (con < 0)
+	    {
+			perror("connection error");
+            conn_free(conn);
             return;
-        }
+		}
 
         err = ev2_poll_register(conn->poll, cfd, EV2_READABLE, conn, echo_server__on_readable);
         if (err < 0) {
             //perror("epoll_ctl");
+			printf("register false\n");
             conn_free(conn);
+            return;
         }
+	
+		err = 0;//++
+		err = ev2_poll_register(conn->poll2, conn->fd2, EV2_READABLE, conn, echo_server__on_readable2);//++
+		if (err < 0) {
+			//perror("epoll_ctl");
+			conn_free(conn);
+            return;
+		}
         INFO("new connection fd=%d\n", conn->fd);
     }
 }
@@ -222,18 +324,20 @@ int echo_server_listen(echo_server_t *s, int port)
         close(s->fd);
         s->fd = -1;
     }
-    s->fd = socket(PF_INET6, SOCK_STREAM, 0);
+
+    s->fd = socket(PF_INET6, SOCK_STREAM, 0);//socket(作为服务器被连接)
     if (s->fd < 0) {
         perror("socket");
         abort();
     }
+
     setsockopt(s->fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     memset(&sa, 0, sizeof(struct sockaddr_in6));
     sa.sin6_family = AF_INET6;
     sa.sin6_port = htons((uint16_t)port);
 
-    err = bind(s->fd, (struct sockaddr *)&sa, sizeof(sa));
+    err = bind(s->fd, (struct sockaddr *)&sa, sizeof(sa));//bind
     if (err < 0) {
         close(s->fd);
         s->fd = -1;
@@ -241,10 +345,10 @@ int echo_server_listen(echo_server_t *s, int port)
         return -1;
     }
 
-    err = listen(s->fd, 100);
+    err = listen(s->fd, 100);//listen
     if (err < 0) {
         close(s->fd);
-        s->fd = -1;
+        s->fd= -1;
         perror("listen");
         return -1;
     }

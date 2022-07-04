@@ -1,4 +1,3 @@
-
 #include "ev2.h"
 #include "queue.h"
 
@@ -35,6 +34,7 @@ struct ev2_poll_s
     ev2_loop_t *loop;
     int fd;
     int events;
+    int revents;
     void *arg;
     ev2_poll_cb poll_cb;
 };
@@ -111,8 +111,10 @@ int ev2_loop_run(ev2_loop_t *loop)
     struct epoll_event *pe;
     int i;
     int nfds;
+    int revents;
     int what;
     ev2_poll_t *poll;
+    QUEUE n, *node;
 
     while (1) {
         if (loop->nfds == 0)
@@ -127,6 +129,7 @@ int ev2_loop_run(ev2_loop_t *loop)
             // TODO: should be continue?
             return -1;
         }
+        QUEUE_INIT(&n);
 
         for (i = 0; i < nfds; ++i) {
             pe = &events[i];
@@ -139,18 +142,34 @@ int ev2_loop_run(ev2_loop_t *loop)
             if (pe->events == EPOLLERR || pe->events == EPOLLHUP) {
                 pe->events |= poll->events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLPRI);
             }
+
             if (pe->events != 0) {
-                what = 0;
-                if (pe->events & EPOLLIN)
-                    what |= EV2_READABLE;
-                if (pe->events & EPOLLPRI)
-                    what |= EV2_PRIORITIZED;
-                if (pe->events & EPOLLOUT)
-                    what |= EV2_WRITABLE;
-                if (pe->events & EPOLLRDHUP)
-                    what |= EV2_DISCONNECT;
-                poll->poll_cb(poll->arg, poll->fd, what);
+                poll->revents = pe->events;
+                QUEUE_REMOVE(&poll->queue);
+                QUEUE_INSERT_TAIL(&n, &poll->queue);
             }
+        }
+
+        while (!QUEUE_EMPTY(&n)) {
+            node = QUEUE_HEAD(&n);
+            poll = QUEUE_DATA(node, ev2_poll_t, queue);
+            QUEUE_REMOVE(node);
+            QUEUE_INSERT_TAIL(&poll->loop->poll_handles, node);
+
+            revents = poll->revents;
+            what = 0;
+            poll->revents = 0;
+
+            if (revents & EPOLLIN)
+                what |= EV2_READABLE;
+            if (revents & EPOLLPRI)
+                what |= EV2_PRIORITIZED;
+            if (revents & EPOLLOUT)
+                what |= EV2_WRITABLE;
+            if (revents & EPOLLRDHUP)
+                what |= EV2_DISCONNECT;
+
+            poll->poll_cb(poll->arg, poll->fd, what);
         }
     }
 
@@ -268,14 +287,14 @@ int ev2_poll_register(ev2_poll_t *poll, int fd, int what, void *arg, ev2_poll_cb
         ev.data.fd = fd;
         ev.events = events;
 
-        if (epoll_ctl(poll->loop->epfd, opcode, fd, &ev)) {
+        if (epoll_ctl(poll->loop->epfd, opcode, fd, &ev) < 0) {
             if (errno != EEXIST) {
                 perror("epoll_ctl");
                 abort();
             }
             ASSERT(opcode == EPOLL_CTL_ADD);
 
-            //if (epoll_ctl(poll->loop->epfd, EPOLL_CTL_MOD, fd, &ev)) {
+            //if (epoll_ctl(poll->loop->epfd, EPOLL_CTL_MOD, fd, &ev) < 0) {
             //    perror("epoll_ctl");
             //    abort();
             //}
