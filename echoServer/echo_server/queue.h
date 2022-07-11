@@ -18,6 +18,7 @@
 
 #include <stddef.h>
 
+#if 0
 typedef void *QUEUE[2];
 
 /* Private macros. */
@@ -32,6 +33,19 @@ typedef void *QUEUE[2];
 #define QUEUE_PREV(q)              (*(QUEUE **) &((*(q))[1]))
 #define QUEUE_SET_NEXT(q, n)       (QUEUE_NEXT(q) = (n))
 #define QUEUE_SET_PREV(q, n)       (QUEUE_PREV(q) = (n))
+
+#endif
+
+#else
+typedef struct QUEUE_S {
+    struct QUEUE_S *next;
+    struct QUEUE_S *prev;
+} QUEUE;
+
+#define QUEUE_NEXT(q)              ((q)->next)
+#define QUEUE_PREV(q)              ((q)->prev)
+#define QUEUE_SET_NEXT(q, n)       ((q)->next = (n))
+#define QUEUE_SET_PREV(q, n)       ((q)->prev = (n))
 
 #endif
 

@@ -10,7 +10,9 @@
       "comment": "了解如何配置远程调试。有关详细信息，请参阅 http://aka.ms/vslinuxdebug",
       "debuggerConfiguration": "gdb",
       "MIMode": "gdb",
-      "args": [8000,8001],
+      "args": [
+        8000
+      ],
       "env": {}
     }
   ]

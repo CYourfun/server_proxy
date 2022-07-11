@@ -57,7 +57,7 @@ ev2_loop_t *ev2_loop_new()
     ev2_loop_t *loop = (ev2_loop_t *)malloc(sizeof(ev2_loop_t));
     if (loop != NULL) {
         memset(loop, 0, sizeof(ev2_loop_t));
-
+        
         loop->epfd = epoll_create1(O_CLOEXEC);
         if (loop->epfd == -1 && (errno == ENOSYS || errno == EINVAL)) {
             loop->epfd = epoll_create(256);
@@ -108,20 +108,21 @@ void ev2_loop_free(ev2_loop_t *loop)
 int ev2_loop_run(ev2_loop_t *loop)
 {
     struct epoll_event events[1024];
-    struct epoll_event *pe;
+    struct epoll_event *pe; 
     int i;
     int nfds;
-    int revents;
+    int revents;//++
     int what;
     ev2_poll_t *poll;
-    QUEUE n, *node;
+    QUEUE n, *node;//++
 
     while (1) {
         if (loop->nfds == 0)
             break;
 
-        nfds = epoll_wait(loop->epfd, events, 1024, -1);
-        if (nfds < 0) {
+         nfds = epoll_wait(loop->epfd, events, 1024, -1);//epoll_wait
+
+         if (nfds < 0) {
             if (errno != EINTR) {
                 perror("epoll_wait");
                 abort();
@@ -132,7 +133,8 @@ int ev2_loop_run(ev2_loop_t *loop)
         QUEUE_INIT(&n);
 
         for (i = 0; i < nfds; ++i) {
-            pe = &events[i];
+            pe = &events[i]; 
+            
             ASSERT((unsigned int)pe->data.fd < loop->npolls);
             ASSERT(loop->polls[pe->data.fd] != NULL);
 
@@ -157,7 +159,7 @@ int ev2_loop_run(ev2_loop_t *loop)
             QUEUE_INSERT_TAIL(&poll->loop->poll_handles, node);
 
             revents = poll->revents;
-            what = 0;
+               what = 0;
             poll->revents = 0;
 
             if (revents & EPOLLIN)
@@ -300,7 +302,7 @@ int ev2_poll_register(ev2_poll_t *poll, int fd, int what, void *arg, ev2_poll_cb
             //}
             return -1;
         }
-        poll->fd = fd;
+        poll->fd = fd; 
         poll->events = events;
         poll->arg = arg;
         poll->poll_cb = poll_cb;

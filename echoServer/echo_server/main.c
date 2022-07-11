@@ -32,7 +32,7 @@ int main(int argc, char **argv)
 	ev2_loop_t *loop;
 
 	init_rlimit();
-	loop = ev2_loop_new();
+	loop = ev2_loop_new();//epoll_create
 
 	for (i = 1; i < argc; ++i) {
 	    port = atoi(argv[i]);
@@ -48,7 +48,7 @@ int main(int argc, char **argv)
 		err = echo_server_listen(s, port);
 		if (err < 0) {
 			ev2_loop_free(loop);
-			return 1;
+			return 1; 
 		}
 		n += 1;
 	}
@@ -57,12 +57,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+
 	int r=ev2_loop_run(loop);
 	if (r < 0)
 	{
 		printf("·µ»Ø´íÎó\n");
 	}
-
 
 	return 0;
 }
