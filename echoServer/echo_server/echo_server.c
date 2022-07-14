@@ -1,5 +1,6 @@
 #include "ev2.h"
 #include "echo_server.h"
+#include "timerfd.h"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -31,11 +32,9 @@ struct conn_s
     ev2_loop_t *loop;
     ev2_poll_t *poll;
 	ev2_poll_t *poll2;
-    ev2_poll_t* poll3;
     int fd1;
 	int fd2;
-    int fd3;//timefd
-    timer_tt *t;//++ ++ ++
+    timer_tt *t;
 };
 
 conn_t *conn_new(ev2_loop_t *loop, int fd)
@@ -54,15 +53,11 @@ conn_t *conn_new(ev2_loop_t *loop, int fd)
 			ev2_poll_free(conn->poll);
 			free(conn);
 			return NULL;
-		}
-        conn->poll3 = ev2_poll_new(loop);
-        if (conn->poll3 == NULL) {
-            ev2_poll_free(conn->poll);
-            ev2_poll_free(conn->poll2);
-            free(conn);
-            return NULL;
-        }
-        conn->fd1 = fd;
+		}     
+
+    conn->t= timer_new(loop);
+
+    conn->fd1 = fd;
     }
     return conn;
 }
@@ -72,21 +67,17 @@ void conn_free(conn_t *conn)
     if (conn != NULL) {
         ev2_poll_free(conn->poll);
 		ev2_poll_free(conn->poll2);
-        //ev2_poll_free(conn->poll3);
+        timer_free(conn->t);//定时器资源释放
         if (conn->fd1 != -1) {
             close(conn->fd1);
             conn->fd1 = -1;
         }
-		if (conn->fd2 != -1)//++ ++
+		if (conn->fd2 != -1)
 		{
 			close(conn->fd2);
 			conn->fd2 = -1;
 		}
-        if (conn->fd3 != -1)//++ ++
-        {
-            close(conn->fd3);
-            conn->fd3 = -1;
-        }
+       
         free(conn);
     }
 }
@@ -127,44 +118,6 @@ void echo_server_free(echo_server_t *s)
     }
 }
 
-struct timer_s//++ ++ ++ combine with epoll
-{
-    ev2_loop_t* loop;
-    ev2_poll_t* poll;
-    int fd1;
-
-};
-
-timer_tt *timer_new(ev2_loop_t* loop) //++ ++ ++
-{
-    timer_tt *t = (timer_tt *)malloc(sizeof(timer_tt));
-    if (t != NULL) {
-        memset(t, 0, sizeof(timer_tt));
-        t->loop = loop;
-        t->poll = ev2_poll_new(loop);
-        if (t->poll == NULL) {
-            free(t);
-            return NULL;
-        }
-        t->fd1 = -1;
-    }
-    return t;
-}
-
-void timer_free(timer_tt* t)
-{
-    if (t != NULL) {
-        ev2_poll_free(t->poll);
-
-        if (t->fd1 != -1) {
-            close(t->fd1);
-            t->fd1 = -1;
-        }
-
-        free(t);
-    }
-}
-
 static int simple_send(int fd, const char *buf, size_t len)
 {
     size_t sent = 0;
@@ -185,13 +138,13 @@ static int simple_send(int fd, const char *buf, size_t len)
     return 0;
 }
 
-static void timer_out(void* arg, int fd, int what)//++ ++ ++
+static void timer_out(void* arg, int fd, int what)
 {
     printf("--------TIME OUT--------\n");
 
     uint64_t exp;
     ssize_t size;
-    conn_t* c = (conn_t*)arg;
+    conn_t *t = (conn_t*)arg;
     int err;
 
     if (what & EV2_READABLE)
@@ -200,49 +153,26 @@ static void timer_out(void* arg, int fd, int what)//++ ++ ++
         if (size == sizeof(uint64_t))
         {
             printf("2---TIME OUT DISCONNECT---2\n");
-            err = shutdown(c->fd1,SHUT_WR);
+                       
+            err = shutdown(t->fd1, SHUT_WR);    
             if (err < 0)
             {
                 perror("shutdown error");
             }
-            err = shutdown(c->fd2, SHUT_WR);
+            err = shutdown(t->fd2, SHUT_WR);          
             if (err < 0)
             {
                 perror("shutdown error");
             }
-            conn_free(c);
         }
+        conn_free(t);
     }
-    close(fd);
-    timer_free(c->t);
-}
-
-static void timer_update(int t)//++ ++ ++
-{
-    int err;
-    printf("------BEGIN TIMER UPDATE------\n");
-    //conn_t* t = (conn_t*)arg;
-    struct itimerspec its;
-
-    its.it_value.tv_sec = 10;
-    its.it_value.tv_nsec = 0;
-
-    its.it_interval.tv_sec = 10;
-    its.it_interval.tv_nsec = 0;
-
-    if (timerfd_settime(t, 0, &its, NULL) < 0)
-    {
-        close(t);
-        return;
-    }
-    printf("timer update\n");
-
-    return;
 }
 
 static void echo_server__on_readable(void *arg, int fd, int what)
 {
     conn_t *conn = (conn_t *)arg;
+
     char buf[4096];
     ssize_t len;
     int err;
@@ -253,7 +183,7 @@ static void echo_server__on_readable(void *arg, int fd, int what)
         return;
     }
     
-    timer_update(conn->fd3);//Synchronized trigger
+    TimerStart(conn->t, 10000, NULL, NULL);
 
     if (what & EV2_DISCONNECT) {
         INFO("disconnect fd=%d\n", conn->fd1);
@@ -298,6 +228,7 @@ static void echo_server__on_readable(void *arg, int fd, int what)
 static void echo_server__on_readable2(void *arg, int fd, int what)
 {
 	conn_t *conn = (conn_t *)arg;
+
 	char buf[4096];
 	ssize_t len;
 	int err;
@@ -307,12 +238,12 @@ static void echo_server__on_readable2(void *arg, int fd, int what)
 		conn_free(conn);
 		return;
 	}
-
-    timer_update(conn->fd3);//Synchronized trigger
+    
+    TimerStart(conn->t, 10000, NULL, NULL);
 
 	if (what & EV2_DISCONNECT) {
 		INFO("disconnect fd=%d\n", conn->fd);
-		shutdown(conn->fd2, SHUT_WR);//++ ++
+		shutdown(conn->fd2, SHUT_WR);
 		conn_free(conn);
 		return;
 	}
@@ -330,7 +261,7 @@ static void echo_server__on_readable2(void *arg, int fd, int what)
 			}
 			else if (len == 0) {
 				INFO("disconnect fd=%d\n", conn->fd2);
-				shutdown(conn->fd2, SHUT_WR);//++ ++
+				shutdown(conn->fd2, SHUT_WR);
 				conn_free(conn);
 				return;
 			}
@@ -354,13 +285,13 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
     echo_server_t *s = (echo_server_t *)arg;
     struct sockaddr_in6 sa;
 	
-	struct sockaddr_in6 sa2;//++
+	struct sockaddr_in6 sa2;
 	memset(&sa2, 0, sizeof(sa2));
 	sa2.sin6_family = AF_INET6;
 	sa2.sin6_addr.__in6_u.__u6_addr32[4] = inet_addr("192.168.91.128");
 	sa2.sin6_port = htons(8080);
 
-    socklen_t sa_len;//++ ++
+    socklen_t sa_len;
     int cfd;
     int err;
 
@@ -389,10 +320,8 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
 			close(cfd);
 			return;
 		}
-		      
-        timer_tt* t = timer_new(conn->loop);//++ ++ ++
-       
-	    conn->fd2 = socket(AF_INET6, SOCK_STREAM, 0);//++
+		           
+	    conn->fd2 = socket(AF_INET6, SOCK_STREAM, 0);
 		if (conn->fd2 < 0)
 		{
 			perror("socket error");
@@ -405,16 +334,16 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
             conn_free(conn);
             return;
 		}
-
-        conn->t = t;//用于释放t
-        int timefd = TimerFdInit(t, conn);//++ ++ ++
-        if (timefd < 0)
+        
+        err = TimerStart(conn->t,10000,conn,timer_out);
+        if (err < 0)
         {
             printf("TimerFdInit fail\n");
-            timer_free(t);
+            conn_free(conn);
+            return;
         }
-        conn->poll3 = t->poll;
-        conn->fd3 = t->fd1;
+   
+       // TimerStop(conn->t);   //停止计时
 
         err = ev2_poll_register(conn->poll,cfd, EV2_READABLE, conn, echo_server__on_readable);
         if (err < 0) {
@@ -494,46 +423,6 @@ int echo_server_listen(echo_server_t *s, int port)
         return -1;
     }
 
-    return 0;
-}
-
-int TimerFdInit(timer_tt *t,conn_t *c)
-{
-    int err;
-     
-    struct itimerspec new_value;
-    /*init time*/
-    new_value.it_value.tv_sec = 10;
-    new_value.it_value.tv_nsec = 0;
-    /*time interval*/
-    new_value.it_interval.tv_sec = 10;
-    new_value.it_interval.tv_nsec = 0;
-
-    t->fd1= timerfd_create(CLOCK_MONOTONIC, 0);
-    if (t->fd1 < 0) {
-        perror("timerfd create error");
-        return -1;
-    }
-
-    int ret = timerfd_settime(t->fd1, 0, &new_value, NULL);//启动定时器
-    if (ret < 0) {
-        perror("timer_settime error");
-        close(t->fd1);
-        return -1;
-    }
-    printf("------1TIMER ON1------\n");
-
-    err= ev2_poll_register(t->poll,      
-        t->fd1,
-        EV2_READABLE,
-        c,
-        timer_out);
-    if (err < 0)
-    {
-        close(t->fd1);
-        t->fd1 = -1;
-        return -1;
-    }
     return 0;
 }
 

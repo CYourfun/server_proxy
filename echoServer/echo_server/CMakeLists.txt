@@ -8,7 +8,9 @@ add_executable(echo_server
 			"ev2.h"
 			"ev2.c"
 			"echo_server.h"
-			"echo_server.c")
+			"echo_server.c"
+			"timerfd.h"
+			"timerfd.c")
 
 if(WIN32)
 	target_compile_definitions(echo_server PRIVATE _GNU_SOURCE _WIN32_WINNT=0x0600 _CRT_SECURE_NO_WARNINGS)
