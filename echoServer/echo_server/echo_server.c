@@ -1,6 +1,7 @@
 #include "ev2.h"
 #include "echo_server.h"
 #include "timerfd.h"
+#include "dissetOfmessage.h"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -25,6 +26,14 @@
 #define INFO(fmt, ...)
 #endif
 
+//用户名，密码
+char *puser1 = "sa";
+char *ppwd1 = "123";
+char puser2[30] = "postgres";
+char ppwd2[30] = "123456";
+
+char saltbuf[4];
+
 typedef struct conn_s conn_t;
 
 struct conn_s
@@ -35,13 +44,15 @@ struct conn_s
     int fd1;
 	int fd2;
     timer_tt *t;
+    int state;
 };
 
 conn_t *conn_new(ev2_loop_t *loop, int fd)
 {
-    conn_t *conn = (conn_t *)malloc(sizeof(conn_t));
+    conn_t* conn = (conn_t*)malloc(sizeof(conn_t)); 
     if (conn != NULL) {
         memset(conn, 0, sizeof(conn_t));
+        conn->state = 0;//+++++++
         conn->loop = loop;
         conn->poll = ev2_poll_new(loop);
 		if (conn->poll == NULL) {
@@ -77,7 +88,9 @@ void conn_free(conn_t *conn)
 			close(conn->fd2);
 			conn->fd2 = -1;
 		}
-       
+        if (conn->state != -1) {        //++++++
+            conn->state= -1;
+        }
         free(conn);
     }
 }
@@ -164,17 +177,31 @@ static void timer_out(void* arg, int fd, int what)
             {
                 perror("shutdown error");
             }
+            conn_free(t);
         }
-        conn_free(t);
     }
 }
 
+enum {
+    step_init,
+    step_handshake,
+    step_startup,
+    step_auth_type_md5,
+    step_auth,
+    step_forward
+};
+
 static void echo_server__on_readable(void *arg, int fd, int what)
 {
-    conn_t *conn = (conn_t *)arg;
+    int typestr;
 
+    conn_t *conn = (conn_t *)arg;
+   
     char buf[4096];
-    ssize_t len;
+    char retbuf[4096];
+
+    ssize_t len = 0;
+    ssize_t len2 = 0;
     int err;
     int count = 0;
 
@@ -183,7 +210,7 @@ static void echo_server__on_readable(void *arg, int fd, int what)
         return;
     }
     
-    TimerStart(conn->t, 10000, NULL, NULL);
+//    TimerStart(conn->t, 10000, NULL, NULL);
 
     if (what & EV2_DISCONNECT) {
         INFO("disconnect fd=%d\n", conn->fd1);
@@ -194,7 +221,7 @@ static void echo_server__on_readable(void *arg, int fd, int what)
 
     if (what & EV2_READABLE) {
         while (1) {
-            len = recv(conn->fd1, buf, sizeof(buf), MSG_DONTWAIT);
+            len = recv(conn->fd1, buf, sizeof(buf), MSG_DONTWAIT);//包的字节是否读完？       
             if (len < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     return;
@@ -210,26 +237,80 @@ static void echo_server__on_readable(void *arg, int fd, int what)
                 conn_free(conn);
                 return;
             }
-            else {
-                err = simple_send(conn->fd2, buf, (size_t)len);
-                if (err < 0) {            
-                    conn_free(conn);
-                    return;
+
+            memcpy(retbuf,buf,4096);  
+  
+            ///*待优化部分*/
+            //if (ssl_enable() && ssl_handshake_done()) {
+            //    // ssl 解密数据.
+            //}
+        
+            if (conn->state == step_init) {
+                if (is_ssl_request(buf)) {
+                    len2=fe_ssl_request_process(buf,retbuf);
                 }
-                if (len < (int)ARRAY_SIZE(buf) ||
-                    count++ >= 1) {
-                    break;
+                else if (is_startup(buf)) {
+                    len2=fe_startup_request_process(buf,retbuf,puser1);
+                    conn->state = step_auth_type_md5;
+                }
+                else {    
+                    for (int i = 0; i < len2; i++)
+                    {
+                        printf("%c\n", buf[i]);
+                    }
+                    shutdown(conn->fd1, SHUT_WR);
+                    conn_free(conn);
                 }
             }
+            else if (conn->state == step_startup) {
+                if (is_startup(buf)) {
+                    len2=fe_startup_request_process(buf, retbuf, puser2);
+                    conn->state = step_auth_type_md5;
+              /*      conn->state = step_auth;*/
+                }
+                else {
+                    for (int i = 0; i < len2; i++)
+                    {
+                        printf("%c\n", buf[i]);
+                    }
+                    shutdown(conn->fd1, SHUT_WR);
+                    conn_free(conn);
+                }
+            }
+            else if (conn->state == step_auth) {
+                len2=fe_auth_process(buf,len,retbuf,puser2,puser1,ppwd1,ppwd2,saltbuf);
+                conn->state = step_forward;
+            }
+            else {
+                //forward();
+                len2=len;
+            }
+
+/*状态验证*/
+/*  typestr = dissect_fe_msg(buf, 0);*/
+/*解包,组包*/
+/* int len2=dissect_packet_fe_msg(buf,len,retbuf, typestr, puser2,puser1,
+ppwd1,ppwd2,saltbuf);*/
+                               
+            err = simple_send(conn->fd2,retbuf,(size_t)len2);
+            if (err < 0) {
+                conn_free(conn);
+                return;
+             }
+            if (len2 < (int)ARRAY_SIZE(retbuf) ||
+                count++ >= 1) {
+                break;
+             }                                  
         }
     }
 }
 
 static void echo_server__on_readable2(void *arg, int fd, int what)
 {
-	conn_t *conn = (conn_t *)arg;
 
+	conn_t *conn = (conn_t *)arg;
 	char buf[4096];
+    int typestr;
 	ssize_t len;
 	int err;
 	int count = 0;
@@ -239,7 +320,7 @@ static void echo_server__on_readable2(void *arg, int fd, int what)
 		return;
 	}
     
-    TimerStart(conn->t, 10000, NULL, NULL);
+  //  TimerStart(conn->t, 10000, NULL, NULL);
 
 	if (what & EV2_DISCONNECT) {
 		INFO("disconnect fd=%d\n", conn->fd);
@@ -250,32 +331,53 @@ static void echo_server__on_readable2(void *arg, int fd, int what)
 
 	if (what & EV2_READABLE) {
 		while (1) {
+            memset(buf,0,sizeof(buf));
 			len = recv(conn->fd2, buf, sizeof(buf), MSG_DONTWAIT);
-			if (len < 0) {
+            if (len < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                     return;
 
-				perror("recv");
+                perror("recv");
+                conn_free(conn);
+                return;
+            }
+            else if (len == 0) {
+                INFO("disconnect fd=%d\n", conn->fd2);
+                shutdown(conn->fd2, SHUT_WR);
+                conn_free(conn);
+                return;
+            }
+
+            if (conn->state == step_init)
+            {
+                if (is_ssl_enable(buf)) {
+                    conn->state = step_handshake;
+                }
+                else {
+                    conn->state = step_startup;
+                }
+            }
+            else if (conn->state == step_auth_type_md5)
+            {
+                be_md5_salt_buf(buf,saltbuf);
+                conn->state = step_auth;
+
+            }
+
+ //to do 服务器发送salt的值，代理端接收，保存并转发
+ /*    typestr=dissect_be_msg(buf,0);          
+dissect_packet_be_msg(buf, saltbuf, typestr, 0);*/                                    
+           			
+			err = simple_send(conn->fd1, buf, (size_t)len);
+			if (err < 0) {               
 				conn_free(conn);
 				return;
 			}
-			else if (len == 0) {
-				INFO("disconnect fd=%d\n", conn->fd2);
-				shutdown(conn->fd2, SHUT_WR);
-				conn_free(conn);
-				return;
+			if (len < (int)ARRAY_SIZE(buf) ||
+				count++ >= 1) {
+				break;
 			}
-			else {
-				err = simple_send(conn->fd1, buf, (size_t)len);
-				if (err < 0) {               
-					conn_free(conn);
-					return;
-				}
-				if (len < (int)ARRAY_SIZE(buf) ||
-					count++ >= 1) {
-					break;
-				}
-			}
+			
 		}
 	}
 }
@@ -285,11 +387,17 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
     echo_server_t *s = (echo_server_t *)arg;
     struct sockaddr_in6 sa;
 	
-	struct sockaddr_in6 sa2;
+	/*struct sockaddr_in6 sa2;
 	memset(&sa2, 0, sizeof(sa2));
 	sa2.sin6_family = AF_INET6;
 	sa2.sin6_addr.__in6_u.__u6_addr32[4] = inet_addr("192.168.91.128");
-	sa2.sin6_port = htons(8080);
+	sa2.sin6_port = htons(5432);*/
+
+    struct sockaddr_in sa2;
+    memset(&sa2, 0, sizeof(sa2));
+    sa2.sin_family = AF_INET;
+    sa2.sin_addr.s_addr = inet_addr("192.168.91.128");
+    sa2.sin_port = htons(5432);
 
     socklen_t sa_len;
     int cfd;
@@ -314,14 +422,15 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
             echo_server_free(s);
             return;
         }
-      
+        
         conn_t *conn = conn_new(s->loop, cfd);
 		if (conn == NULL) {
 			close(cfd);
 			return;
 		}
 		           
-	    conn->fd2 = socket(AF_INET6, SOCK_STREAM, 0);
+	   // conn->fd2 = socket(AF_INET6, SOCK_STREAM, 0);
+        conn->fd2 = socket(AF_INET, SOCK_STREAM, 0);
 		if (conn->fd2 < 0)
 		{
 			perror("socket error");
@@ -334,8 +443,8 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
             conn_free(conn);
             return;
 		}
-        
-        err = TimerStart(conn->t,10000,conn,timer_out);
+     
+     //   err = TimerStart(conn->t,10000,conn,timer_out);
         if (err < 0)
         {
             printf("TimerFdInit fail\n");
@@ -343,8 +452,6 @@ static void echo_server__on_new_connection(void *arg, int fd, int what)
             return;
         }
    
-       // TimerStop(conn->t);   //停止计时
-
         err = ev2_poll_register(conn->poll,cfd, EV2_READABLE, conn, echo_server__on_readable);
         if (err < 0) {
             //perror("epoll_ctl");
@@ -425,6 +532,3 @@ int echo_server_listen(echo_server_t *s, int port)
 
     return 0;
 }
-
-
-

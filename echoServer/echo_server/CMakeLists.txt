@@ -10,7 +10,10 @@ add_executable(echo_server
 			"echo_server.h"
 			"echo_server.c"
 			"timerfd.h"
-			"timerfd.c")
+			"timerfd.c" 
+			"Md5.c" "Md5.h" "dissetOfmessage.c" "dissetOfmessage.h")
+
+target_link_libraries(echo_server crypto)
 
 if(WIN32)
 	target_compile_definitions(echo_server PRIVATE _GNU_SOURCE _WIN32_WINNT=0x0600 _CRT_SECURE_NO_WARNINGS)

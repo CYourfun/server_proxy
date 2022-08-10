@@ -1,0 +1,15 @@
+{
+  "version": "0.2.1",
+  "tasks": [
+    {
+      "taskLabel": "任务-echo_server",
+      "appliesTo": "echo_server.c",
+      "type": "launch"
+    },
+    {
+      "taskLabel": "任务-echo_server",
+      "appliesTo": "out/echo_server",
+      "type": "launch"
+    }
+  ]
+}
